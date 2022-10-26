@@ -7,6 +7,8 @@
 from __future__ import absolute_import, division, print_function
 
 from trainer import Trainer
+from trainer_da import Trainer_da
+from trainer_da_no_rgl import Trainer_da_no_grl
 from options import MonodepthOptions
 
 options = MonodepthOptions()
@@ -14,5 +16,10 @@ opts = options.parse()
 
 
 if __name__ == "__main__":
-    trainer = Trainer(opts)
+    if opts.discrimination and opts.use_grl:
+        trainer = Trainer_da(opts)
+    elif opts.discrimination:
+        trainer = Trainer_da_no_grl(opts)
+    else:
+        trainer = Trainer(opts)
     trainer.train()

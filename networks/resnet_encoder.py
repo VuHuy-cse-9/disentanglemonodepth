@@ -62,7 +62,7 @@ def resnet_multiimage_input(num_layers, pretrained=False, num_input_images=1):
 class ResnetEncoder(nn.Module):
     """Pytorch module for a resnet encoder
     """
-    def __init__(self, num_layers, pretrained, num_input_images=1):
+    def __init__(self, num_layers, pretrained, num_input_images=1, activation="relu"):
         super(ResnetEncoder, self).__init__()
 
         self.num_ch_enc = np.array([64, 64, 128, 256, 512])
@@ -81,8 +81,23 @@ class ResnetEncoder(nn.Module):
         else:
             self.encoder = resnets[num_layers](pretrained)
 
+        self.set_activation(activation)
+
         if num_layers > 34:
             self.num_ch_enc[1:] *= 4
+
+    def set_activation(self, mode):
+        if mode == "relu":
+            return
+        elif mode == "leakyrelu":
+            for name, m in self.encoder.named_children():
+                for child_name, child_m in m.named_children():
+                    for sub_child_name, sub_child_m in child_m.named_children():
+                        if sub_child_name == "relu":
+                            self.encoder._modules[name]._modules[child_name]._modules[sub_child_name] = nn.LeakyReLU(0.2, True)     
+            return 
+        else:
+            raise NotImplementedError("We haven't support {}".format(mode))
 
     def forward(self, input_image):
         self.features = []

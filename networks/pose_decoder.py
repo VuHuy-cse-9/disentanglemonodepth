@@ -45,7 +45,6 @@ class PoseDecoder(nn.Module):
                 out = self.relu(out)
 
         # (4, 12, 6, 20)
-        print(f">> out {out.shape}")
         out = out.mean(3).mean(2)
 
         out = 0.01 * out.view(-1, self.num_frames_to_predict_for, 1, 6)

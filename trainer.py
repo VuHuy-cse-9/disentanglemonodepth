@@ -22,9 +22,12 @@ from kitti_utils import *
 from layers import *
 
 import datasets
+from datasets.oxford_dataset import OxfordRobotDataset
 import networks
-from networks.domain_classifier import DomainClassifier
 from IPython import embed
+from tqdm import tqdm
+
+from networks.gradient_reversal.module import GradientReversal
 
 
 class Trainer:
@@ -35,6 +38,9 @@ class Trainer:
         # checking height and width are multiples of 32
         assert self.opt.height % 32 == 0, "'height' must be a multiple of 32"
         assert self.opt.width % 32 == 0, "'width' must be a multiple of 32"
+
+        if self.opt.adversarial:
+            assert self.opt.dataset == "oxford", "'dataset' must be oxford for adversarial setting"
 
         self.models = {}
         self.parameters_to_train = []
@@ -62,9 +68,6 @@ class Trainer:
             self.models["encoder"].num_ch_enc, self.opt.scales)
         self.models["depth"].to(self.device)
         self.parameters_to_train += list(self.models["depth"].parameters())
-        
-        #Classification task:
-        self.models["classifier"] = DomainClassifier(256, 512)
         
         #Posenet:
         if self.use_pose_net:
@@ -105,6 +108,16 @@ class Trainer:
             self.models["predictive_mask"].to(self.device)
             self.parameters_to_train += list(self.models["predictive_mask"].parameters())
 
+        if self.opt.adversarial:
+            self.models["gradient_reverse"] = GradientReversal(1.0)
+            self.models["domain_classifier"] = DomainClassifier(512, 1024)
+            self.models["gradient_reverse"].to(self.device)
+            self.models["domain_classifier"].to(self.device)
+            self.domain_loss = torch.nn.BCELoss()
+            self.parameters_to_train += \
+                        list(self.models["gradient_reverse"].parameters()) + \
+                        list(self.models["domain_classifier"].parameters())
+
         self.model_optimizer = optim.Adam(self.parameters_to_train, self.opt.learning_rate)
         self.model_lr_scheduler = optim.lr_scheduler.StepLR(
             self.model_optimizer, self.opt.scheduler_step_size, 0.1)
@@ -119,7 +132,7 @@ class Trainer:
         # data
         datasets_dict = {"kitti": datasets.KITTIRAWDataset,
                          "kitti_odom": datasets.KITTIOdomDataset,
-                         "oxford": datasets.OxfordRobotDataset}
+                         "oxford": OxfordRobotDataset}
         self.dataset = datasets_dict[self.opt.dataset]
 
         fpath = os.path.join(os.path.dirname(__file__), "splits", self.opt.split, "{}_files.txt")
@@ -139,18 +152,22 @@ class Trainer:
             self.opt.frame_ids,         #[0, -1, 1]
             4,    
             is_train=True,              # Is train mode
-            img_ext=img_ext)            # Image type: png / jpg
+            img_ext=img_ext,            # Image type: png / jpg
+            is_adversarial=self.opt.adversarial,
+            is_mcie=self.opt.mcie)            
         
         self.train_loader = DataLoader(
             train_dataset, 
             self.opt.batch_size, True,
             num_workers=self.opt.num_workers, 
             pin_memory=True, 
-            drop_last=True)
+            drop_last=True,
+            )
         
         val_dataset = self.dataset(
             self.opt.data_path, val_filenames, self.opt.height, self.opt.width,
-            self.opt.frame_ids, 4, is_train=False, img_ext=img_ext)
+            self.opt.frame_ids, 4, is_train=False, img_ext=img_ext,            # Image type: png / jpg
+            is_adversarial=self.opt.adversarial)
         
         self.val_loader = DataLoader(
             val_dataset, self.opt.batch_size, True,
@@ -216,14 +233,15 @@ class Trainer:
 
         print("Training")
         self.set_train()
-
         for batch_idx, inputs in enumerate(self.train_loader):
             before_op_time = time.time()
-
             outputs, losses = self.process_batch(inputs)
             
             self.model_optimizer.zero_grad()
-            losses["loss"].backward()
+            if self.opt.adversarial:
+                torch.autograd.backward([losses["domain_loss"]])
+            else:
+                losses["loss"].backward()
             self.model_optimizer.step()
 
             duration = time.time() - before_op_time
@@ -256,10 +274,6 @@ class Trainer:
             all_features = self.models["encoder"](all_color_aug)
             all_features = [torch.split(f, self.opt.batch_size) for f in all_features]
 
-            if opt.classification_task:
-                cls_loss = np.mean(classification_task(all_features))
-                
-
             features = {}
             for i, k in enumerate(self.opt.frame_ids):
                 features[k] = [f[i] for f in all_features]
@@ -269,16 +283,23 @@ class Trainer:
             # Otherwise, we only feed the image with frame_id 0 through the depth encoder
             features = self.models["encoder"](inputs["color_aug", 0, 0])
             outputs = self.models["depth"](features)
+
+            if self.opt.adversarial:
+                reverse_feature = self.models["gradient_reverse"](features[-1])
+                flatten_feature = torch.reshape(reverse_feature, (self.opt.batch_size, 512, -1))
+                mean_feature = torch.mean(flatten_feature, dim=2, dtype=torch.float32)
+                domain_y = self.models["domain_classifier"](mean_feature)
+                outputs["domain_pred"] = domain_y
         if self.opt.predictive_mask:
             outputs["predictive_mask"] = self.models["predictive_mask"](features)
 
         if self.use_pose_net:
             outputs.update(
                 self.predict_poses(inputs, features),
-                ) #Update new Translation, Rotation, Cam_T_Cam
+                ) #Update new Translation, Rotation, Cam_T_Cam            
 
         self.generate_images_pred(inputs, outputs)
-        losses = self.compute_losses(inputs, outputs).append(cls_loss)
+        losses = self.compute_losses(inputs, outputs)
 
         return outputs, losses
 
@@ -537,10 +558,15 @@ class Trainer:
             smooth_loss = get_smooth_loss(norm_disp, color)
 
             loss += self.opt.disparity_smoothness * smooth_loss / (2 ** scale)
+            
             total_loss += loss
             losses["loss/{}".format(scale)] = loss
 
         total_loss /= self.num_scales
+        
+        if self.opt.adversarial:
+            losses["domain_loss"] = self.domain_loss(outputs["domain_pred"], inputs["domain_gt"])
+        
         losses["loss"] = total_loss
         return losses
 

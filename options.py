@@ -34,7 +34,7 @@ class MonodepthOptions:
         self.parser.add_argument("--split",
                                  type=str,
                                  help="which training split to use",
-                                 choices=["eigen_zhou", "eigen_full", "odom", "benchmark", "oxford_day", "oxford_all", "oxford_night"],
+                                 choices=["eigen_zhou", "eigen_full", "odom", "benchmark", "oxford_day", "oxford_all", "oxford_night", "oxford_da", "oxford_test", "oxford_da_test", "oxford_night_test", "oxford_night_mcie", "oxford_night_mcie_test"],
                                  default="oxford_day")
         self.parser.add_argument("--num_layers",
                                  type=int,
@@ -52,11 +52,11 @@ class MonodepthOptions:
         self.parser.add_argument("--height",
                                  type=int,
                                  help="input image height",
-                                 default=192)
+                                 default=256)
         self.parser.add_argument("--width",
                                  type=int,
                                  help="input image width",
-                                 default=640)
+                                 default=512)
         self.parser.add_argument("--disparity_smoothness",
                                  type=float,
                                  help="disparity smoothness weight",
@@ -74,6 +74,10 @@ class MonodepthOptions:
                                  type=float,
                                  help="maximum depth",
                                  default=100.0)
+        self.parser.add_argument("--max_eval_depth",
+                                 type=float,
+                                 help="maximum depth",
+                                 default=60.0)
         self.parser.add_argument("--use_stereo",
                                  help="if set, uses stereo pair for training",
                                  action="store_true")
@@ -89,6 +93,10 @@ class MonodepthOptions:
                                  help="batch size",
                                  default=12)
         self.parser.add_argument("--learning_rate",
+                                 type=float,
+                                 help="learning rate",
+                                 default=1e-4)
+        self.parser.add_argument("--G_learning_rate",
                                  type=float,
                                  help="learning rate",
                                  default=1e-4)
@@ -117,6 +125,52 @@ class MonodepthOptions:
         self.parser.add_argument("--classification_task",
                                  help="Add classification loss for auxilary function",
                                  action="store_true")
+        self.parser.add_argument("--discrimination",
+                                 help="Discrimination training",
+                                 action="store_true")
+        self.parser.add_argument("--discriminator_mode",
+                                 type=str,
+                                 help="Type of discriminator to use",
+                                 default="mlp",
+                                 choices=["mlp", "conv"])
+        self.parser.add_argument("--num_discriminator",
+                                 type=int,
+                                 help="Number of layer apply discriminator",
+                                 default=1,
+                                 choices=[1, 2, 3, 4])
+        self.parser.add_argument("--mcie",
+                                 help="Do Map-Consistent Image Enhancement",
+                                 action="store_true")
+        self.parser.add_argument("--use_grl",
+                                 help="if set, use gradient reverse layer",
+                                 action="store_true")
+        self.parser.add_argument("--gauss",
+                                 help="if set, add gauss noise augmentation",
+                                 action="store_true")
+        self.parser.add_argument("--leakyrelu",
+                                 help="if set, set leakyrelu as night encoder activation",
+                                 action="store_true")
+        self.parser.add_argument("--experience_play",
+                                 help="if set, experience play set up will be used for training Generator-Discriminator",
+                                 action="store_true")
+        self.parser.add_argument("--gan_mode",
+                                 type=str,
+                                 help="Type of discriminator to use",
+                                 default="vanilla",
+                                 choices=["lsgan", "vanilla"])
+        self.parser.add_argument("--num_d_per_g",
+                                 type=int,
+                                 help="Number of discrminator per generator",
+                                 default=1)
+        self.parser.add_argument("--pool_size",
+                                 type=int,
+                                 help="Number of feature to store",
+                                 default=50)
+        self.parser.add_argument("--day_depth_guide",
+                                 action="store_true",
+                                 help="if set, use day depth decoder guided night_encoder"
+                                 )
+
         
         #--no_ssim: Loss function only for L1-Loss
         self.parser.add_argument("--no_ssim",
@@ -137,7 +191,15 @@ class MonodepthOptions:
                                  help="normal or shared",
                                  default="separate_resnet",
                                  choices=["posecnn", "separate_resnet", "shared"])
-
+        self.parser.add_argument("--adversarial",
+                                 help="if set, use gradient reverse layer",
+                                 action="store_true")
+        self.parser.add_argument("--warm_up",
+                                 help="if set, only train generator for first 5 epoch",
+                                 action="store_true")
+        self.parser.add_argument("--smooth_domain_label",
+                                 help="if set, smooth domain label into 0.1, 0.9",
+                                 action="store_true")
         # SYSTEM options
         self.parser.add_argument("--no_cuda",
                                  help="if set disables CUDA",
@@ -151,6 +213,10 @@ class MonodepthOptions:
         self.parser.add_argument("--load_weights_folder",
                                  type=str,
                                  help="name of model to load")
+        self.parser.add_argument("--load_day_weights_folder",
+                                 type=str,
+                                 help="name of day model to load")
+     
         self.parser.add_argument("--models_to_load",
                                  nargs="+",
                                  type=str,
@@ -188,7 +254,7 @@ class MonodepthOptions:
                                  type=str,
                                  default="eigen",
                                  choices=[
-                                    "eigen", "eigen_benchmark", "benchmark", "odom_9", "odom_10"],
+                                    "eigen", "eigen_benchmark", "benchmark", "odom_9", "odom_10", "oxford_day", "oxford_night", "oxford_all", "oxford_night_test"],
                                  help="which split to run eval on")
         self.parser.add_argument("--save_pred_disps",
                                  help="if set saves predicted disparities",

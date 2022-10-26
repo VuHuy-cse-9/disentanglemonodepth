@@ -15,6 +15,9 @@ from PIL import Image  # using pillow-simd for increased speed
 import torch
 import torch.utils.data as data
 from torchvision import transforms
+from datasets.mcie import MCIE
+from skimage.util import random_noise
+
 
 
 def pil_loader(path):
@@ -46,7 +49,10 @@ class MonoDataset(data.Dataset):
                  frame_idxs,
                  num_scales,
                  is_train=False,
-                 img_ext='.jpg'):
+                 img_ext='.jpg',
+                 is_adversarial=False,
+                 is_mcie=False,
+                 is_guassian_noise=False):
         super(MonoDataset, self).__init__()
 
         self.data_path = data_path
@@ -63,15 +69,11 @@ class MonoDataset(data.Dataset):
 
         self.loader = pil_loader
         self.to_tensor = transforms.ToTensor()
-        
-        print(f"data_path: {self.data_path}")
-        print(f"filenames: {self.filenames}")
-        print(f"height: {height}")
-        print(f"width: {width}")
-        print(f"num_scales: {self.num_scales}")
-        print(f"frame_idxs: {self.frame_idxs}")
-        print(f"is_train: {self.is_train}")
-        print(f"img_ext: {self.img_ext}")
+        self.is_adversarial = is_adversarial
+        self.is_mcie = is_mcie
+        if is_mcie:
+            self.mcie = MCIE()
+        self.is_guassian_noise = is_guassian_noise
 
         # We need to specify augmentations differently in newer versions of torchvision.
         # We first try the newer tuple version; if this fails we fall back to scalars
@@ -110,11 +112,25 @@ class MonoDataset(data.Dataset):
                     inputs[(n, im, i)] = self.resize[i](inputs[(n, im, i - 1)])
 
         for k in list(inputs):
-            f = inputs[k]
+            img = inputs[k]
             if "color" in k:
                 n, im, i = k
-                inputs[(n, im, i)] = self.to_tensor(f)
-                inputs[(n + "_aug", im, i)] = self.to_tensor(color_aug(f))
+                inputs[(n, im, i)] = self.to_tensor(img)
+                if self.is_mcie:
+                    img = self.mcie(np.array(img))
+                if self.is_guassian_noise:
+                    img = np.array(self.gaussian_noise( \
+                        image=np.array(img), 
+                        clip=True), dtype=np.float32)
+                img = self.to_tensor(img)
+                inputs[(n + "_aug", im, i)] = color_aug(img)
+            
+    def gaussian_noise(self, image, mean=0.0, var=0.01, clip=True):
+        return random_noise(image, 
+                            mode="gaussian",
+                            mean=mean,
+                            var=var,
+                            clip=clip)
 
     def __len__(self):
         return len(self.filenames)
@@ -212,6 +228,12 @@ class MonoDataset(data.Dataset):
             stereo_T[0, 3] = side_sign * baseline_sign * 0.1
 
             inputs["stereo_T"] = torch.from_numpy(stereo_T)
+
+        if self.is_adversarial:
+            if "day" in line[0]:
+                inputs["domain_gt"] = torch.tensor(0.0, dtype=torch.float32)
+            else: #night
+                inputs["domain_gt"] = torch.tensor(1.0, dtype=torch.float32)
 
         return inputs
 

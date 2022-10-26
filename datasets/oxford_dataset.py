@@ -2,6 +2,8 @@ import os
 import skimage.transform
 import numpy as np
 import PIL.Image as pil
+from PIL import Image
+
 
 from kitti_utils import generate_depth_map
 from .mono_dataset import MonoDataset
@@ -30,12 +32,17 @@ class OxfordRobotDataset(MonoDataset):
         gt_dir = os.path.join(
             self.data_path,
             scene_name + "_gt")
+        print("path: {}".format(gt_dir))
 
         return os.path.exists(gt_dir)
 
     def get_color(self, folder, frame_index, side, do_flip):
         #Load RGB image:
         color = self.loader(self.get_image_path(folder, frame_index, side))
+        
+        if self.is_train: #Because valdiation + test have already been crop
+            color = color.crop((0, 160, 1280, 960-160))
+            color = color.resize((512, 256),Image.ANTIALIAS)
 
         if do_flip:
             color = color.transpose(pil.FLIP_LEFT_RIGHT)

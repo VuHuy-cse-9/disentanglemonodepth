@@ -10,7 +10,7 @@ from torch.utils.data import DataLoader
 from layers import disp_to_depth
 from utils import readlines
 from options import MonodepthOptions
-import datasets
+from datasets.oxford_dataset import OxfordRobotDataset
 import networks
 
 cv2.setNumThreads(0)  # This speeds up evaluation 5x on our unix systems (OpenCV 3.3.1)
@@ -60,7 +60,7 @@ def evaluate(opt):
     """Evaluates a pretrained model using a specified test set
     """
     MIN_DEPTH = 1e-3
-    MAX_DEPTH = 80
+    MAX_DEPTH = 60
 
     assert sum((opt.eval_mono, opt.eval_stereo)) == 1, \
         "Please choose mono or stereo evaluation by setting either --eval_mono or --eval_stereo"
@@ -80,9 +80,16 @@ def evaluate(opt):
 
         encoder_dict = torch.load(encoder_path)
 
-        dataset = datasets.KITTIRAWDataset(opt.data_path, filenames,
-                                           encoder_dict['height'], encoder_dict['width'],
-                                           [0], 4, is_train=False)
+        img_ext = '.png' if opt.png else '.jpg'
+        dataset = OxfordRobotDataset(
+                        opt.data_path, 
+                        filenames,
+                        encoder_dict['height'], 
+                        encoder_dict['width'],
+                        [0], 
+                        4, 
+                        img_ext=img_ext,
+                        is_train=False)
         dataloader = DataLoader(dataset, 16, shuffle=False, num_workers=opt.num_workers,
                                 pin_memory=True, drop_last=False)
 
@@ -99,7 +106,7 @@ def evaluate(opt):
         depth_decoder.eval()
 
         pred_disps = []
-
+        gt = []
         print("-> Computing predictions with size {}x{}".format(
             encoder_dict['width'], encoder_dict['height']))
 
@@ -121,8 +128,11 @@ def evaluate(opt):
                     pred_disp = batch_post_process_disparity(pred_disp[:N], pred_disp[N:, :, ::-1])
 
                 pred_disps.append(pred_disp)
-
+                gt.append(np.squeeze(data['depth_gt'].cpu().numpy()))
         pred_disps = np.concatenate(pred_disps)
+        if gt[-1].ndim==2:
+            gt[-1] = gt[-1][np.newaxis,:]
+        gt = np.concatenate(gt)
 
     else:
         # Load predictions from file
@@ -162,11 +172,11 @@ def evaluate(opt):
         print("-> No ground truth is available for the KITTI benchmark, so not evaluating. Done.")
         quit()
 
-    gt_path = os.path.join(splits_dir, opt.eval_split, "gt_depths.npz")
-    gt_depths = np.load(gt_path, 
-                        fix_imports=True, 
-                        encoding='latin1',
-                        allow_pickle = True)["data"]
+    # gt_path = os.path.join(splits_dir, opt.eval_split, "gt_depths.npz")
+    # gt_depths = np.load(gt_path, 
+    #                     fix_imports=True, 
+    #                     encoding='latin1',
+    #                     allow_pickle = True)["data"]
 
     print("-> Evaluating")
 
@@ -183,7 +193,7 @@ def evaluate(opt):
 
     for i in range(pred_disps.shape[0]):
 
-        gt_depth = gt_depths[i]
+        gt_depth = gt[i]
         gt_height, gt_width = gt_depth.shape[:2]
 
         pred_disp = pred_disps[i]
@@ -213,6 +223,11 @@ def evaluate(opt):
 
         pred_depth[pred_depth < MIN_DEPTH] = MIN_DEPTH
         pred_depth[pred_depth > MAX_DEPTH] = MAX_DEPTH
+        
+        # # range 60m
+        mask2 = gt_depth<=60
+        pred_depth = pred_depth[mask2]
+        gt_depth = gt_depth[mask2]
 
         errors.append(compute_errors(gt_depth, pred_depth))
 

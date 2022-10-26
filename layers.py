@@ -43,7 +43,6 @@ def transformation_from_parameters(axisangle, translation, invert=False):
         M = torch.matmul(R, T)
     else:
         M = torch.matmul(T, R)
-    print(f"M: {M.shape}")
 
     return M
 
@@ -70,11 +69,8 @@ def rot_from_axisangle(vec):
     Input 'vec' has to be Bx1x3
     """
     #(4, 1, 3)
-    print(f"vec: {vec}")
     angle = torch.norm(vec, 2, 2, True)
-    print(f"angle: {angle.shape}")
     axis = vec / (angle + 1e-7)
-    print(f"axis: {axis.angle}")
 
     ca = torch.cos(angle)
     sa = torch.sin(angle)
